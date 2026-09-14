@@ -21,6 +21,9 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
 def kaggle_credentials_available() -> bool:
+    # Only checks the file-based token; KAGGLE_USERNAME/KAGGLE_KEY env vars
+    # (mentioned in the module docstring) are read directly by the `kaggle`
+    # CLI itself, so we don't need to duplicate that check here.
     token_path = Path.home() / ".kaggle" / "kaggle.json"
     return token_path.exists()
 
