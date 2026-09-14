@@ -20,6 +20,16 @@ CNN) → sign lookup (Gardiner list) → reading-order sort → gloss output.
 - Reading order is a simple row-major (top-to-bottom, left-to-right) sort —
   doesn't account for true Egyptian reading order (which depends on
   sign-facing direction).
+- ~51 of 171 sign classes have too few images (fewer than 3) to have any
+  held-out test data — the classifier trains on them but its accuracy on
+  those specific signs is unverified.
+
+## Model baseline
+ResNet18 fine-tuned on the Glyphnet/Pyramid-of-Unas dataset (171 classes,
+~4,031 images): **97.3% test accuracy** (620 test images, ~120 classes with
+test coverage). Confusions are concentrated among visually similar sign
+clusters (e.g. G1/G17/G35/G4; M1/M29/M17) rather than arbitrary errors — see
+`notebooks/03_evaluate_classifier.ipynb` for the full per-class report.
 
 ## Setup
 
