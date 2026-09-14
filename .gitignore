@@ -8,3 +8,4 @@ models/*.pt
 models/*.pth
 .pytest_cache/
 .streamlit/
+*.egg-info/

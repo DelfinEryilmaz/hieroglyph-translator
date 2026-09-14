@@ -27,7 +27,12 @@ CNN) → sign lookup (Gardiner list) → reading-order sort → gloss output.
 py -V:3.13 -m venv .venv
 .venv/Scripts/python -m pip install --index-url https://download.pytorch.org/whl/cpu torch torchvision
 .venv/Scripts/python -m pip install -r requirements.txt
+.venv/Scripts/python -m pip install -e .
 ```
+
+The last step installs this repo's own `hieroglyph` package in editable mode,
+so `from hieroglyph.data...` imports work from scripts, notebooks, and tests
+without manual `sys.path` hacking.
 
 ## Project layout
 - `src/hieroglyph/` — pipeline code (data, models, segmentation, lookup, inference)
