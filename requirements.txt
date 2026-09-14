@@ -1,0 +1,13 @@
+# Local dev / inference / Streamlit demo — CPU only (no local GPU).
+# Install torch/torchvision from the CPU wheel index:
+#   pip install --index-url https://download.pytorch.org/whl/cpu torch torchvision
+# Colab (training) has its own preinstalled torch/torchvision — do not force
+# these exact pins there; print torch.__version__ in the training notebook
+# and reconcile instead of assuming.
+torch==2.14.0
+torchvision==0.29.0
+opencv-python==5.0.0.93
+streamlit==1.63.0
+numpy==2.5.2
+pillow==12.3.0
+pytest==9.1.1
