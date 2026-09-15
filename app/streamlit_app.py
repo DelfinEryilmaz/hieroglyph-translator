@@ -15,9 +15,11 @@ from PIL import Image
 from hieroglyph.lookup.gardiner_lookup import GardinerLookup
 from hieroglyph.models.classifier import load_checkpoint
 from hieroglyph.pipeline.inference import run_inference
+from hieroglyph.segmentation.yolo import load_or_fallback
 from hieroglyph.utils.visualization import draw_annotated_image
 
 CHECKPOINT_PATH = Path(__file__).resolve().parent.parent / "models" / "best_model.pt"
+YOLO_CHECKPOINT_PATH = Path(__file__).resolve().parent.parent / "models" / "yolo_seg.pt"
 
 st.set_page_config(page_title="Hieroglyph Translator", page_icon="🏺", layout="wide")
 
@@ -101,6 +103,11 @@ def load_model_and_lookup():
     return model, class_to_idx, lookup
 
 
+@st.cache_resource(show_spinner="Loading segmenter...")
+def load_segmenter():
+    return load_or_fallback(YOLO_CHECKPOINT_PATH)
+
+
 def confidence_class(confidence: float) -> str:
     if confidence >= 0.85:
         return "conf-high"
@@ -133,12 +140,22 @@ with st.sidebar:
         "each sign gets its own literal gloss, not fluent English.</div>",
         unsafe_allow_html=True,
     )
-    st.markdown(
-        '<div class="limitation-note">Segmentation uses classical image '
-        "processing, not a trained detector — works best on clean, "
-        "high-contrast photos.</div>",
-        unsafe_allow_html=True,
-    )
+    if YOLO_CHECKPOINT_PATH.exists():
+        st.markdown(
+            '<div class="limitation-note">Segmentation uses a YOLOv8 '
+            "detector fine-tuned on synthesized composite images — see "
+            "notebooks/05_evaluate_segmenter.ipynb for its held-out test "
+            "accuracy.</div>",
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(
+            '<div class="limitation-note">Segmentation uses classical image '
+            "processing, not a trained detector — works best on clean, "
+            "high-contrast photos. Run notebooks/04_train_segmenter.ipynb "
+            "to train a detector and unlock this upgrade.</div>",
+            unsafe_allow_html=True,
+        )
     st.markdown(
         '<div class="limitation-note">Reading order is a simple top-to-bottom, '
         "left-to-right guess — true Egyptian reading order depends on which "
@@ -169,6 +186,7 @@ if not CHECKPOINT_PATH.exists():
     st.stop()
 
 model, class_to_idx, lookup = load_model_and_lookup()
+segmenter = load_segmenter()
 
 uploaded_file = st.file_uploader("Upload a photo", type=["png", "jpg", "jpeg"])
 
@@ -180,7 +198,7 @@ pil_image = Image.open(uploaded_file)
 image_bgr = pil_to_pipeline_image(pil_image)
 
 with st.spinner("Detecting and classifying signs..."):
-    result = run_inference(image_bgr, model, class_to_idx, lookup)
+    result = run_inference(image_bgr, model, class_to_idx, lookup, segmenter=segmenter)
 
 if not result.signs:
     st.warning(
