@@ -4,6 +4,8 @@ __pycache__/
 .ipynb_checkpoints/
 data/raw/
 data/processed/
+data/synthetic_composites/
+data/real_eval_photos/
 models/*.pt
 models/*.pth
 .pytest_cache/
