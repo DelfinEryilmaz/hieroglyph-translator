@@ -9,14 +9,21 @@ can't provide, and no large aligned hieroglyph→English sentence corpus exists
 to train on. Output is a per-sign gloss list, presented honestly as that.
 
 ## Pipeline
-Photo → glyph segmentation (classical CV) → glyph classification (fine-tuned
-CNN) → sign lookup (Gardiner list) → reading-order sort → gloss output.
+Photo → glyph segmentation (classical CV, or a fine-tuned YOLOv8 detector —
+see below) → glyph classification (fine-tuned CNN) → sign lookup (Gardiner
+list) → reading-order sort → gloss output.
 
 ## Known limitations
-- Segmentation is classical OpenCV (contour detection), not a trained
-  detector — works best on clean/high-contrast photos, struggles on heavily
-  weathered or cluttered wall photos. Built behind a swappable interface so a
-  trained detector can replace it later.
+- Segmentation defaults to classical OpenCV (contour detection) — works
+  best on clean/high-contrast photos, struggles on heavily weathered or
+  cluttered wall photos. A trained alternative now exists
+  (`hieroglyph.segmentation.yolo.YoloSegmenter`, a YOLOv8 detector
+  fine-tuned on synthesized composite images — see
+  `notebooks/04_train_segmenter.ipynb` and
+  `reports/2026-09-15-segmentation-detector-sourcing.md`) but isn't trained
+  by default; run the training notebook and drop the result at
+  `models/yolo_seg.pt` to have the Streamlit demo pick it up automatically
+  (falls back to classical CV if that file isn't present).
 - Reading order is a simple row-major (top-to-bottom, left-to-right) sort —
   doesn't account for true Egyptian reading order (which depends on
   sign-facing direction).
@@ -51,6 +58,8 @@ without manual `sys.path` hacking.
 - `app/streamlit_app.py` — demo web app
 - `tests/` — unit/integration tests
 - `scripts/download_data.py` — dataset download helper
+- `scripts/download_pretrained_yolo.py` — pretrained segmentation-detector
+  checkpoint download helper
 - `reports/` — reference material and notes collected while building this
   (dataset sourcing, Gardiner list sourcing, decisions) — read this for
   context if picking the project back up later
