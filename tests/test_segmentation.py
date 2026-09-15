@@ -1,7 +1,10 @@
 import numpy as np
 import cv2
+from pathlib import Path
 
 from hieroglyph.segmentation.classical import ClassicalSegmenter
+from hieroglyph.segmentation.types import BoundingBox
+from hieroglyph.segmentation.yolo import _xyxy_to_boxes, load_or_fallback
 
 
 def _synthetic_image_with_shapes(shape_centers, shape_size=30, canvas_size=300):
@@ -44,3 +47,27 @@ def test_tiny_speck_is_filtered_as_noise():
 
     boxes = ClassicalSegmenter().detect(image)
     assert boxes == [], "A 1-2px speck should be filtered out by min_area_fraction"
+
+
+def test_xyxy_to_boxes_converts_corner_format_to_xywh():
+    xyxy = [(10.0, 20.0, 40.0, 50.0)]
+
+    boxes = _xyxy_to_boxes(xyxy)
+
+    assert boxes == [BoundingBox(x=10, y=20, width=30, height=30)]
+
+
+def test_xyxy_to_boxes_rounds_fractional_coordinates():
+    xyxy = [(10.4, 20.6, 40.2, 50.8)]
+
+    boxes = _xyxy_to_boxes(xyxy)
+
+    assert boxes == [BoundingBox(x=10, y=21, width=30, height=30)]
+
+
+def test_load_or_fallback_returns_classical_when_no_checkpoint(tmp_path: Path):
+    missing_path = tmp_path / "does_not_exist.pt"
+
+    segmenter = load_or_fallback(missing_path)
+
+    assert isinstance(segmenter, ClassicalSegmenter)
