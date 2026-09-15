@@ -7,6 +7,9 @@
 torch==2.14.0
 torchvision==0.29.0
 opencv-python==5.0.0.93
+# ultralytics wraps YOLOv8 (used for the trained segmentation detector).
+# Regular pip install (no special CPU index needed, unlike torch above).
+ultralytics==8.4.152
 streamlit==1.63.0
 numpy==2.5.2
 pillow==12.3.0
