@@ -3,6 +3,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import pytest
 
 from hieroglyph.segmentation.synthesize import (
     box_to_yolo_line,
@@ -57,12 +58,23 @@ def test_box_to_yolo_line_normalizes_to_unit_range():
 
     line = box_to_yolo_line(box, canvas_w=100, canvas_h=200)
 
-    cls, cx, cy, w, h = line.split()
-    assert cls == "0"
-    assert abs(float(cx) - 0.25) < 1e-6  # (10 + 15) / 100
-    assert abs(float(cy) - 0.20) < 1e-6  # (20 + 20) / 200
-    assert abs(float(w) - 0.30) < 1e-6
-    assert abs(float(h) - 0.20) < 1e-6
+    parts = line.split()
+    assert len(parts) == 9  # class + 4 corners x 2 coords
+    assert parts[0] == "0"
+    values = [float(v) for v in parts[1:]]
+    x1, y1, x2, y1b, x2b, y2, x1b, y2b = values
+    # top-left
+    assert abs(x1 - 0.10) < 1e-6  # 10 / 100
+    assert abs(y1 - 0.10) < 1e-6  # 20 / 200
+    # top-right
+    assert abs(x2 - 0.40) < 1e-6  # (10+30) / 100
+    assert abs(y1b - 0.10) < 1e-6
+    # bottom-right
+    assert abs(x2b - 0.40) < 1e-6
+    assert abs(y2 - 0.30) < 1e-6  # (20+40) / 200
+    # bottom-left
+    assert abs(x1b - 0.10) < 1e-6
+    assert abs(y2b - 0.30) < 1e-6
 
 
 def test_list_crop_paths_finds_all_pngs_under_class_folders(tmp_path: Path):
@@ -112,4 +124,43 @@ def test_generate_dataset_writes_matching_images_and_labels(tmp_path: Path):
         for line in lines:
             parts = line.split()
             assert parts[0] == "0"
-            assert len(parts) == 5
+            assert len(parts) == 9
+
+
+def test_generate_dataset_labels_match_placed_box_positions(tmp_path: Path):
+    raw_dir = tmp_path / "raw"
+    cls_dir = raw_dir / "A1"
+    cls_dir.mkdir(parents=True)
+    cv2.imwrite(str(cls_dir / "0.png"), _dark_square_crop())
+
+    crop_paths = list_crop_paths(raw_dir)
+    output_dir = tmp_path / "synthetic"
+    generate_dataset(crop_paths, output_dir, num_composites=1, crops_per_composite=(1, 1), canvas_size=(100, 100), seed=7)
+
+    label_path = output_dir / "labels" / "composite_0000.txt"
+    lines = [l for l in label_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+    assert len(lines) == 1
+
+    parts = lines[0].split()
+    assert len(parts) == 9
+    x1, y1, x2, y1b, x2b, y2, x1b, y2b = [float(v) for v in parts[1:]]
+    # A rectangle's corners: top-left and bottom-left share x; top-left and top-right share y
+    assert abs(x1 - x1b) < 1e-6
+    assert abs(x2 - x2b) < 1e-6
+    assert abs(y1 - y1b) < 1e-6
+    assert abs(y2 - y2b) < 1e-6
+    assert x1 < x2
+    assert y1 < y2
+
+
+def test_generate_dataset_raises_clear_error_on_unreadable_crop(tmp_path: Path):
+    raw_dir = tmp_path / "raw"
+    cls_dir = raw_dir / "A1"
+    cls_dir.mkdir(parents=True)
+    (cls_dir / "not_an_image.png").write_bytes(b"this is not valid png data")
+
+    crop_paths = list_crop_paths(raw_dir)
+    output_dir = tmp_path / "synthetic"
+
+    with pytest.raises(ValueError, match="Could not read crop image"):
+        generate_dataset(crop_paths, output_dir, num_composites=1, canvas_size=(100, 100), seed=1)

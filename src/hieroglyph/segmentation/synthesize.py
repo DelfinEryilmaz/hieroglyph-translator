@@ -3,8 +3,10 @@
 The classifier's dataset (data/raw/<gardiner_code>/*.png) is per-glyph
 crops -- no real photo has ever been annotated with per-glyph bounding
 boxes. To train a detector we manufacture that annotation for free: paste
-several crops onto a plain background at random positions, and the pasted
-positions *are* the ground-truth boxes, no manual labeling needed.
+several crops onto a synthetic background at random positions and scales,
+and the pasted positions *are* the ground-truth boxes, no manual labeling
+needed. Backgrounds carry mild Gaussian noise rather than being a perfectly
+flat color, since no real photo is a flat color either.
 
 Only the glyph's ink (darker-than-background pixels, matching
 ClassicalSegmenter's own `invert=True` assumption) gets pasted -- pasting
@@ -63,21 +65,43 @@ def synthesize_composite(
     crops: list[np.ndarray],
     canvas_size: tuple[int, int] = (640, 640),
     background_value: int = 210,
+    background_noise_std: float = 10.0,
+    scale_range: tuple[float, float] = (0.7, 1.3),
     max_overlap_fraction: float = 0.15,
     max_attempts_per_crop: int = 20,
     rng: random.Random | None = None,
 ) -> SynthesizedComposite:
     """Paste `crops` (grayscale numpy arrays) onto one synthetic canvas at
-    random, non-overlapping-ish positions. Crops that can't be placed
-    within max_attempts_per_crop tries (canvas too crowded) are skipped.
+    random, non-overlapping-ish positions, with per-crop scale jitter and
+    a mildly noisy (not perfectly flat) background -- real photos are
+    never a flat color, and fine-tuning only on flat backgrounds risks
+    pulling the pretrained checkpoint's real-photo-exposed weights toward
+    a trivial synthetic domain instead. Crops that can't be placed within
+    max_attempts_per_crop tries (canvas too crowded) are skipped.
     """
     rng = rng or random.Random()
     canvas_w, canvas_h = canvas_size
-    canvas = np.full((canvas_h, canvas_w), background_value, dtype=np.uint8)
+
+    # Vectorized (numpy) per-pixel noise around background_value -- a pure
+    # Python per-pixel loop over a 640x640 canvas would be far too slow
+    # across thousands of composites. Seeded from `rng` (not numpy's own
+    # global state) so the whole composite stays deterministic given one
+    # `random.Random` seed.
+    rng_np = np.random.default_rng(rng.getrandbits(32))
+    noise = rng_np.normal(loc=0.0, scale=background_noise_std, size=(canvas_h, canvas_w))
+    canvas = np.clip(background_value + noise, 0, 255).astype(np.uint8)
+
     boxes: list[BoundingBox] = []
 
     for crop in crops:
+        scale = rng.uniform(*scale_range)
+        h0, w0 = crop.shape
+        if scale != 1.0:
+            new_w, new_h = max(1, round(w0 * scale)), max(1, round(h0 * scale))
+            interpolation = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
+            crop = cv2.resize(crop, (new_w, new_h), interpolation=interpolation)
         h, w = crop.shape
+
         if w >= canvas_w or h >= canvas_h:
             continue  # crop too big for this canvas, skip rather than crash
 
@@ -94,12 +118,24 @@ def synthesize_composite(
 
 
 def box_to_yolo_line(box: BoundingBox, canvas_w: int, canvas_h: int) -> str:
-    """One YOLO-format label line: `class cx cy w h`, all normalized to [0, 1]."""
-    cx = (box.x + box.width / 2) / canvas_w
-    cy = (box.y + box.height / 2) / canvas_h
-    w = box.width / canvas_w
-    h = box.height / canvas_h
-    return f"0 {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}"
+    """One YOLO segmentation-format label line: class index followed by
+    the box's own four corners as a degenerate polygon (top-left,
+    top-right, bottom-right, bottom-left), each coordinate normalized to
+    [0, 1].
+
+    The fine-tuned checkpoint is a YOLOv8-*segmentation* model (see
+    reports/2026-09-15-segmentation-detector-sourcing.md) -- ultralytics'
+    segment-task dataset loader requires segment labels, not detection's
+    `class cx cy w h`, and raises ValueError otherwise. A box's own four
+    corners, traced in order, is exactly the box as a polygon: no
+    information is lost, and ultralytics converts it back to the same
+    bounding box internally (`segments2boxes`).
+    """
+    x1 = box.x / canvas_w
+    y1 = box.y / canvas_h
+    x2 = box.x2 / canvas_w
+    y2 = box.y2 / canvas_h
+    return f"0 {x1:.6f} {y1:.6f} {x2:.6f} {y1:.6f} {x2:.6f} {y2:.6f} {x1:.6f} {y2:.6f}"
 
 
 def write_composite(composite: SynthesizedComposite, image_path: Path, label_path: Path) -> None:
@@ -156,7 +192,12 @@ def generate_dataset(
     for i in range(num_composites):
         n_crops = rng.randint(*crops_per_composite)
         chosen_paths = rng.choices(crop_paths, k=n_crops)
-        crops = [cv2.imread(str(p), cv2.IMREAD_GRAYSCALE) for p in chosen_paths]
+        crops = []
+        for p in chosen_paths:
+            crop = cv2.imread(str(p), cv2.IMREAD_GRAYSCALE)
+            if crop is None:
+                raise ValueError(f"Could not read crop image (missing, corrupt, or not an image): {p}")
+            crops.append(crop)
 
         composite = synthesize_composite(crops, canvas_size=canvas_size, rng=rng)
 
