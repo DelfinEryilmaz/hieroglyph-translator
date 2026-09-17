@@ -83,6 +83,31 @@ def test_synthesize_column_composite_places_all_crops_when_canvas_tall_enough():
     assert len(composite.boxes) == 8
 
 
+def test_synthesize_column_composite_places_later_smaller_crop_after_earlier_oversized_one():
+    # Each crop is independently rescaled, so an earlier crop failing to fit
+    # at the column's current y must not abandon the rest of the column --
+    # a later, smaller crop can still legitimately fit at that same y.
+    small = _dark_square_crop(size=5)
+    big = _dark_square_crop(size=30)
+    crops = [small] * 9 + [big] + [small] * 5
+    rng = random.Random(5)
+
+    composite = synthesize_column_composite(
+        crops,
+        canvas_size=(100, 60),
+        n_columns=1,
+        scale_range=(1.0, 1.0),
+        glyph_gap_range=(0.0, 0.0),
+        rng=rng,
+    )
+
+    # 9 leading small crops (y: 0 -> 45), the 30px-tall crop doesn't fit at
+    # y=45 (45+30=75 > 60) and is skipped alone, then 3 of the 5 trailing
+    # small crops still fit in the remaining 15px (y: 45 -> 60).
+    assert len(composite.boxes) == 12
+    assert all(b.height == 5 for b in composite.boxes)  # the oversized crop never got placed
+
+
 def test_synthesize_column_composite_is_deterministic_given_same_seed():
     crops = [_dark_square_crop(size=10) for _ in range(5)]
 

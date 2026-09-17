@@ -145,10 +145,12 @@ def synthesize_column_composite(
     frame -- this is the scale-gap fix that makes composites look like a
     dense real photo instead of a handful of oversized glyphs.
 
-    Columns that run out of vertical room stop placing further crops
-    (heights are positive, so once one glyph doesn't fit, none of that
-    column's remaining glyphs will either); a scaled crop that doesn't fit
-    its column's horizontal band is skipped individually. An empty
+    A crop that doesn't fit its column -- either its scaled width overflows
+    the column's horizontal band, or its scaled height would run past the
+    canvas at the column's current y -- is skipped individually rather than
+    abandoning the rest of the column: each crop is independently
+    rescaled, so a later, smaller crop can still legitimately fit in the
+    remaining room even after an earlier, larger one didn't. An empty
     `crops` list or non-positive `n_columns` yields a composite with no
     boxes.
     """
@@ -187,7 +189,7 @@ def synthesize_column_composite(
                 continue  # this scaled crop doesn't fit this column's x band, skip only it
 
             if y + h > canvas_h:
-                break  # column is out of vertical room; later glyphs won't fit either
+                continue  # this scaled crop doesn't fit at the current y, skip only it
 
             paste_crop(canvas, crop, x, y)
             boxes.append(BoundingBox(x=x, y=y, width=w, height=h))
