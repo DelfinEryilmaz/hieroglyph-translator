@@ -11,6 +11,7 @@ from hieroglyph.segmentation.synthesize import (
     list_crop_paths,
     paste_crop,
     split_crop_paths,
+    synthesize_column_composite,
     synthesize_composite,
 )
 from hieroglyph.segmentation.types import BoundingBox
@@ -51,6 +52,79 @@ def test_synthesize_composite_is_deterministic_given_same_seed():
     result_b = synthesize_composite(crops, canvas_size=(100, 100), rng=random.Random(42))
 
     assert [(b.x, b.y) for b in result_a.boxes] == [(b.x, b.y) for b in result_b.boxes]
+
+
+def test_synthesize_column_composite_boxes_overlap_in_y_when_gap_negative():
+    crops = [_dark_square_crop(size=20), _dark_square_crop(size=20)]
+    rng = random.Random(1)
+
+    composite = synthesize_column_composite(
+        crops,
+        canvas_size=(100, 300),
+        n_columns=1,
+        glyph_gap_range=(-0.5, -0.5),
+        scale_range=(1.0, 1.0),
+        rng=rng,
+    )
+
+    assert len(composite.boxes) == 2
+    first, second = composite.boxes
+    # Deliberate negative gap: the second glyph's top starts above the
+    # first glyph's bottom edge, i.e. they overlap vertically.
+    assert second.y < first.y2
+
+
+def test_synthesize_column_composite_places_all_crops_when_canvas_tall_enough():
+    crops = [_dark_square_crop(size=10) for _ in range(8)]
+    rng = random.Random(2)
+
+    composite = synthesize_column_composite(crops, canvas_size=(100, 2000), n_columns=2, rng=rng)
+
+    assert len(composite.boxes) == 8
+
+
+def test_synthesize_column_composite_is_deterministic_given_same_seed():
+    crops = [_dark_square_crop(size=10) for _ in range(5)]
+
+    result_a = synthesize_column_composite(crops, canvas_size=(150, 600), rng=random.Random(42))
+    result_b = synthesize_column_composite(crops, canvas_size=(150, 600), rng=random.Random(42))
+
+    assert [(b.x, b.y, b.width, b.height) for b in result_a.boxes] == [
+        (b.x, b.y, b.width, b.height) for b in result_b.boxes
+    ]
+    assert np.array_equal(result_a.image, result_b.image)
+
+
+def test_synthesize_column_composite_boxes_cluster_into_n_columns_distinct_x_bands():
+    crops = [_dark_square_crop(size=10) for _ in range(6)]
+    rng = random.Random(3)
+
+    composite = synthesize_column_composite(
+        crops, canvas_size=(300, 300), n_columns=3, scale_range=(1.0, 1.0), rng=rng
+    )
+
+    assert len(composite.boxes) == 6
+    distinct_x = sorted(set(b.x for b in composite.boxes))
+    assert len(distinct_x) == 3
+
+
+def test_synthesize_column_composite_handles_empty_crops_list():
+    composite = synthesize_column_composite([], canvas_size=(50, 50), rng=random.Random(0))
+
+    assert composite.boxes == []
+    assert composite.image.shape == (50, 50)
+
+
+def test_synthesize_column_composite_skips_crop_taller_than_canvas():
+    crops = [_dark_square_crop(size=50)]
+    rng = random.Random(4)
+
+    composite = synthesize_column_composite(
+        crops, canvas_size=(60, 30), n_columns=1, scale_range=(1.0, 1.0), rng=rng
+    )
+
+    assert composite.boxes == []
+    assert composite.image.shape == (30, 60)
 
 
 def test_box_to_yolo_line_normalizes_to_unit_range():

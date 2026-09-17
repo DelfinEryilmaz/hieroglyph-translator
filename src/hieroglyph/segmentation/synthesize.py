@@ -117,6 +117,88 @@ def synthesize_composite(
     return SynthesizedComposite(image=canvas, boxes=boxes)
 
 
+def synthesize_column_composite(
+    crops: list[np.ndarray],
+    canvas_size: tuple[int, int] = (200, 640),
+    n_columns: int = 2,
+    column_gap_range: tuple[float, float] = (0.0, 0.15),
+    glyph_gap_range: tuple[float, float] = (-0.15, 0.08),
+    background_value: int = 210,
+    background_noise_std: float = 10.0,
+    scale_range: tuple[float, float] = (0.2, 0.6),
+    rng: random.Random | None = None,
+) -> SynthesizedComposite:
+    """Paste `crops` onto one synthetic canvas as `n_columns` tightly packed,
+    top-to-bottom stacks -- modeling a dense papyrus column of signs packed
+    edge-to-edge, unlike `synthesize_composite`'s sparse random scatter.
+
+    Crops are round-robin assigned to columns (crop i goes to column
+    i % n_columns), then each column is laid out by **deterministic
+    cumulative stacking**, not reject-sampling: a glyph's y advances by
+    `glyph_h * (1 + gap_fraction)`, with gap_fraction drawn fresh per glyph
+    from `glyph_gap_range` -- a negative value is a deliberate small
+    overlap, matching how real carved/painted columns crowd signs edge to
+    edge. `paste_crop`'s dark-pixel-only paste already gives correct
+    partial occlusion where two glyphs overlap, so it's reused unchanged.
+    `scale_range` defaults much smaller than the scatter function's,
+    since a real column's individual signs are small relative to the
+    frame -- this is the scale-gap fix that makes composites look like a
+    dense real photo instead of a handful of oversized glyphs.
+
+    Columns that run out of vertical room stop placing further crops
+    (heights are positive, so once one glyph doesn't fit, none of that
+    column's remaining glyphs will either); a scaled crop that doesn't fit
+    its column's horizontal band is skipped individually. An empty
+    `crops` list or non-positive `n_columns` yields a composite with no
+    boxes.
+    """
+    rng = rng or random.Random()
+    canvas_w, canvas_h = canvas_size
+
+    rng_np = np.random.default_rng(rng.getrandbits(32))
+    noise = rng_np.normal(loc=0.0, scale=background_noise_std, size=(canvas_h, canvas_w))
+    canvas = np.clip(background_value + noise, 0, 255).astype(np.uint8)
+
+    boxes: list[BoundingBox] = []
+    if not crops or n_columns <= 0:
+        return SynthesizedComposite(image=canvas, boxes=boxes)
+
+    column_width = canvas_w / n_columns
+
+    for col in range(n_columns):
+        column_crops = crops[col::n_columns]
+        if not column_crops:
+            continue
+
+        gap_frac = rng.uniform(*column_gap_range)
+        x = round(col * column_width + gap_frac * column_width)
+
+        y = 0
+        for crop in column_crops:
+            scale = rng.uniform(*scale_range)
+            h0, w0 = crop.shape
+            if scale != 1.0:
+                new_w, new_h = max(1, round(w0 * scale)), max(1, round(h0 * scale))
+                interpolation = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
+                crop = cv2.resize(crop, (new_w, new_h), interpolation=interpolation)
+            h, w = crop.shape
+
+            if x < 0 or x + w > canvas_w:
+                continue  # this scaled crop doesn't fit this column's x band, skip only it
+
+            if y + h > canvas_h:
+                break  # column is out of vertical room; later glyphs won't fit either
+
+            paste_crop(canvas, crop, x, y)
+            boxes.append(BoundingBox(x=x, y=y, width=w, height=h))
+
+            gap_fraction = rng.uniform(*glyph_gap_range)
+            next_y = y + round(h * (1 + gap_fraction))
+            y = next_y if next_y > y else y + 1  # guard against a pathological gap_fraction <= -1
+
+    return SynthesizedComposite(image=canvas, boxes=boxes)
+
+
 def box_to_yolo_line(box: BoundingBox, canvas_w: int, canvas_h: int) -> str:
     """One YOLO segmentation-format label line: class index followed by
     the box's own four corners as a degenerate polygon (top-left,
