@@ -8,6 +8,7 @@ import pytest
 from hieroglyph.segmentation.synthesize import (
     box_to_yolo_line,
     generate_dataset,
+    generate_mixed_dataset,
     list_crop_paths,
     paste_crop,
     split_crop_paths,
@@ -263,3 +264,68 @@ def test_generate_dataset_raises_clear_error_on_unreadable_crop(tmp_path: Path):
 
     with pytest.raises(ValueError, match="Could not read crop image"):
         generate_dataset(crop_paths, output_dir, num_composites=1, canvas_size=(100, 100), seed=1)
+
+
+def _make_raw_crop_paths(tmp_path: Path) -> list[Path]:
+    raw_dir = tmp_path / "raw"
+    for cls in ["A1", "B2"]:
+        cls_dir = raw_dir / cls
+        cls_dir.mkdir(parents=True)
+        for i in range(3):
+            cv2.imwrite(str(cls_dir / f"{i}.png"), _dark_square_crop())
+    return list_crop_paths(raw_dir)
+
+
+def test_generate_mixed_dataset_writes_matching_images_and_labels(tmp_path: Path):
+    crop_paths = _make_raw_crop_paths(tmp_path)
+    output_dir = tmp_path / "synthetic"
+
+    generate_mixed_dataset(crop_paths, output_dir, num_composites=5, seed=1)
+
+    images = sorted((output_dir / "images").glob("*.png"))
+    labels = sorted((output_dir / "labels").glob("*.txt"))
+    assert len(images) == 5
+    assert len(labels) == 5
+
+
+def test_generate_mixed_dataset_exercises_both_column_and_scatter_paths(tmp_path: Path):
+    crop_paths = _make_raw_crop_paths(tmp_path)
+    output_dir = tmp_path / "synthetic"
+    scatter_canvas_size = (640, 640)
+    column_canvas_sizes = [(200, 640), (640, 200), (300, 640)]
+
+    generate_mixed_dataset(
+        crop_paths,
+        output_dir,
+        num_composites=30,
+        dense_fraction=0.5,
+        scatter_canvas_size=scatter_canvas_size,
+        column_canvas_sizes=column_canvas_sizes,
+        seed=1,
+    )
+
+    images = sorted((output_dir / "images").glob("*.png"))
+    shapes = {cv2.imread(str(p), cv2.IMREAD_GRAYSCALE).shape for p in images}
+
+    # cv2 image shape is (height, width); canvas sizes above are (width, height)
+    column_shapes = {(h, w) for (w, h) in column_canvas_sizes}
+    scatter_shape = (scatter_canvas_size[1], scatter_canvas_size[0])
+
+    assert shapes & column_shapes, f"no column-shaped composite found among {shapes}"
+    assert scatter_shape in shapes, f"no scatter-shaped composite found among {shapes}"
+
+
+def test_generate_mixed_dataset_raises_clear_error_on_empty_crop_paths(tmp_path: Path):
+    output_dir = tmp_path / "synthetic"
+
+    with pytest.raises(ValueError, match="crop_paths is empty"):
+        generate_mixed_dataset([], output_dir, num_composites=1, seed=1)
+
+
+def test_generate_mixed_dataset_writes_nothing_when_num_composites_is_zero(tmp_path: Path):
+    crop_paths = _make_raw_crop_paths(tmp_path)
+    output_dir = tmp_path / "synthetic"
+
+    generate_mixed_dataset(crop_paths, output_dir, num_composites=0, seed=1)
+
+    assert not (output_dir / "images").exists() or list((output_dir / "images").glob("*.png")) == []

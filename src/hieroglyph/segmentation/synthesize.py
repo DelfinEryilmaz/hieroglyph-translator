@@ -290,3 +290,58 @@ def generate_dataset(
             image_path=output_dir / "images" / f"composite_{i:04d}.png",
             label_path=output_dir / "labels" / f"composite_{i:04d}.txt",
         )
+
+
+def generate_mixed_dataset(
+    crop_paths: list[Path],
+    output_dir: Path,
+    num_composites: int,
+    dense_fraction: float = 0.5,
+    scatter_canvas_size: tuple[int, int] = (640, 640),
+    column_canvas_sizes: list[tuple[int, int]] = [(200, 640), (640, 200), (300, 640)],
+    seed: int = 0,
+) -> None:
+    """Generate `num_composites` synthetic training images + YOLO labels,
+    mixing dense column-packed composites with the existing sparse scatter
+    composites -- a real photo can be either a densely packed papyrus
+    column or a sparser wall-carving-style inscription, so training data
+    that's only one or the other leaves the detector generalizing to just
+    half of what it'll see. `generate_dataset` (scatter-only) stays the
+    entry point for callers that don't need the mix; this is purely
+    additive alongside it.
+
+    Per composite index, `rng.random() < dense_fraction` picks
+    `synthesize_column_composite` with its `canvas_size` sampled uniformly
+    from `column_canvas_sizes` (covers both portrait single-column and
+    landscape multi-column real-world shapes); otherwise falls back to
+    `synthesize_composite`'s scatter path at `scatter_canvas_size`.
+
+    Writes output_dir/images/composite_%04d.png and
+    output_dir/labels/composite_%04d.txt, same naming convention as
+    `generate_dataset`.
+    """
+    if not crop_paths:
+        raise ValueError("crop_paths is empty")
+
+    rng = random.Random(seed)
+    for i in range(num_composites):
+        n_crops = rng.randint(3, 10)  # same default range as generate_dataset's crops_per_composite
+        chosen_paths = rng.choices(crop_paths, k=n_crops)
+        crops = []
+        for p in chosen_paths:
+            crop = cv2.imread(str(p), cv2.IMREAD_GRAYSCALE)
+            if crop is None:
+                raise ValueError(f"Could not read crop image (missing, corrupt, or not an image): {p}")
+            crops.append(crop)
+
+        if rng.random() < dense_fraction:
+            canvas_size = rng.choice(column_canvas_sizes)
+            composite = synthesize_column_composite(crops, canvas_size=canvas_size, rng=rng)
+        else:
+            composite = synthesize_composite(crops, canvas_size=scatter_canvas_size, rng=rng)
+
+        write_composite(
+            composite,
+            image_path=output_dir / "images" / f"composite_{i:04d}.png",
+            label_path=output_dir / "labels" / f"composite_{i:04d}.txt",
+        )
