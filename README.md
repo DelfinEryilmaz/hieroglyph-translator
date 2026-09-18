@@ -31,10 +31,23 @@ list) → reading-order sort → gloss output.
   of this (no destructive whole-image downscale) independently of
   retraining; `generate_mixed_dataset`
   (`src/hieroglyph/segmentation/synthesize.py`) fixes the training-data
-  half, but the shipped `models/yolo_seg.pt` hasn't been retrained on it
-  yet — see `docs/superpowers/specs/2026-09-17-dense-text-detection-design.md`
+  half — see `docs/superpowers/specs/2026-09-17-dense-text-detection-design.md`
   and `notebooks/05_evaluate_segmenter.ipynb` Section 5 for the real-papyrus
   qualitative check.
+- A retrained checkpoint on the mixed dense/sparse dataset still showed
+  false positives on non-glyph illustration content (figures, clothing
+  folds) in real photos — the model had never seen a negative example.
+  Two further, independent levers now exist:
+  `synthesize_negative_composite` (procedural distractor training
+  composites with empty labels) and a real-data fine-tune stage using 90
+  committed, human-annotated real photo files
+  (`data/real_eval_photos/{train,valid}/`) — 83 train files that are really
+  28 distinct source photos (27 with three Roboflow rotation-augmented
+  copies each, one with two) plus 7 distinct valid photos, so the effective
+  distinct sample size is 35, not 90 — see
+  `docs/superpowers/specs/2026-09-18-real-data-finetune-and-hard-negatives-design.md`.
+  As with the dense/sparse fix, `models/yolo_seg.pt` hasn't been retrained
+  on this yet.
 - Reading order is a simple row-major (top-to-bottom, left-to-right) sort —
   doesn't account for true Egyptian reading order (which depends on
   sign-facing direction).
