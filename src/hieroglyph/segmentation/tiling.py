@@ -35,6 +35,12 @@ from ultralytics import YOLO
 
 from hieroglyph.segmentation.base import Segmenter
 from hieroglyph.segmentation.classical import ClassicalSegmenter
+
+# Reused rather than reimplemented here: it is pure BoundingBox geometry
+# with no synthesis-specific behavior, and a second copy would be free to
+# drift from this one. Same convention as the `_xyxy_to_boxes` import below
+# -- this package already shares private helpers across its modules.
+from hieroglyph.segmentation.synthesize import _boxes_overlap_fraction
 from hieroglyph.segmentation.types import BoundingBox
 from hieroglyph.segmentation.yolo import _xyxy_to_boxes
 
@@ -96,8 +102,10 @@ def _offset_box(box: BoundingBox, dx: int, dy: int) -> BoundingBox:
 
 def _iou(a: BoundingBox, b: BoundingBox) -> float:
     """Standard intersection-over-union (union denominator) -- distinct from
-    synthesize.py's _boxes_overlap_fraction (min-area denominator, used for
-    a different purpose there: rejecting placement during data synthesis).
+    _boxes_overlap_fraction (min-area denominator), which is what
+    merge_tiled_detections actually suppresses duplicates with; see there
+    for why. Kept as the plain, symmetric overlap measure for callers that
+    want true IoU.
     """
     ix1, iy1 = max(a.x, b.x), max(a.y, b.y)
     ix2, iy2 = min(a.x2, b.x2), min(a.y2, b.y2)
@@ -116,16 +124,29 @@ def merge_tiled_detections(
 ) -> list[BoundingBox]:
     """Greedy NMS over detections already offset to global image coordinates:
     sort by confidence descending, keep a box only if it doesn't overlap an
-    already-kept box above iou_threshold. Confidence is used only internally
-    here and never appears on the returned BoundingBox -- this is exactly
-    the "internal only, never leaks onto BoundingBox" constraint from
-    types.py.
+    already-kept box by at least iou_threshold. Confidence is used only
+    internally here and never appears on the returned BoundingBox -- this is
+    exactly the "internal only, never leaks onto BoundingBox" constraint
+    from types.py.
+
+    The overlap metric is intersection-over-**smaller-area**
+    (`_boxes_overlap_fraction`), not union-IoU, because the duplicates this
+    function exists to remove are asymmetric: a sign straddling a tile
+    boundary is detected whole in one tile and truncated in the other, and a
+    half-cut box scores only ~0.5 union-IoU against its whole twin -- right
+    at the default threshold, so both survived and the tile seam produced a
+    spurious partial detection *plus* a duplicate. Against the smaller box's
+    own area that same pair scores ~1.0 and the partial is correctly
+    suppressed. Two genuinely separate signs still overlap very little under
+    either metric, so this does not over-suppress.
     """
     ordered = sorted(detections, key=lambda pair: pair[1], reverse=True)
 
     kept: list[BoundingBox] = []
     for box, _confidence in ordered:
-        if all(_iou(box, kept_box) <= iou_threshold for kept_box in kept):
+        # `<` (not `<=`): a box exactly at the threshold is a duplicate,
+        # standard NMS semantics.
+        if all(_boxes_overlap_fraction(box, kept_box) < iou_threshold for kept_box in kept):
             kept.append(box)
     return kept
 

@@ -3,6 +3,7 @@ from pathlib import Path
 import numpy as np
 
 from hieroglyph.segmentation.classical import ClassicalSegmenter
+from hieroglyph.segmentation.synthesize import _boxes_overlap_fraction
 from hieroglyph.segmentation.tiling import (
     _iou,
     _offset_box,
@@ -217,14 +218,74 @@ def test_merge_tiled_detections_empty_input_returns_empty_list():
 
 
 def test_merge_tiled_detections_below_threshold_overlap_keeps_both():
-    # Two boxes that overlap a little, but below iou_threshold -- both kept.
+    # Two boxes that overlap a little, but below the threshold -- both kept.
     a = BoundingBox(x=0, y=0, width=10, height=10)
     b = BoundingBox(x=9, y=9, width=10, height=10)  # small corner overlap
 
-    iou = _iou(a, b)
-    assert iou < 0.5  # sanity check on the fixture itself
+    # Sanity check on the fixture itself, in the metric NMS actually uses
+    # (intersection over the smaller box's area): 1x1 over 100 = 0.01.
+    assert _boxes_overlap_fraction(a, b) < 0.5
 
     merged = merge_tiled_detections([(a, 0.9), (b, 0.5)], iou_threshold=0.5)
+
+    assert len(merged) == 2
+
+
+def test_merge_tiled_detections_suppresses_half_cut_boundary_duplicate():
+    # The duplicate this function exists to remove: a sign captured whole in
+    # one tile and truncated by the tile boundary in its neighbor. Union-IoU
+    # scores this pair at exactly 50/100 = 0.5 -- it used to survive the
+    # default threshold, leaving both a spurious partial box and a duplicate.
+    # Intersection-over-smaller scores it 50/50 = 1.0, so the partial goes.
+    whole = BoundingBox(x=0, y=0, width=10, height=10)
+    half_cut = BoundingBox(x=0, y=0, width=5, height=10)
+
+    assert _iou(whole, half_cut) == 0.5  # what the old metric saw
+    assert _boxes_overlap_fraction(whole, half_cut) == 1.0
+
+    merged = merge_tiled_detections([(whole, 0.9), (half_cut, 0.8)], iou_threshold=0.5)
+
+    assert merged == [whole]
+
+
+def test_merge_tiled_detections_suppresses_overlap_exactly_at_threshold():
+    # Standard NMS semantics: at the threshold a box is a duplicate, not a
+    # keeper. a and b share a 5x10 strip, half of each 10x10 box's area.
+    a = BoundingBox(x=0, y=0, width=10, height=10)
+    b = BoundingBox(x=5, y=0, width=10, height=10)
+
+    assert _boxes_overlap_fraction(a, b) == 0.5  # exactly at the threshold
+
+    merged = merge_tiled_detections([(a, 0.9), (b, 0.8)], iou_threshold=0.5)
+
+    assert merged == [a]
+
+
+def test_merge_tiled_detections_keeps_two_adjacent_signs_that_barely_touch():
+    # Guard against over-suppression from the stricter metric: two genuinely
+    # separate signs sitting side by side in a packed column overlap only
+    # slightly, and must both survive.
+    left = BoundingBox(x=0, y=0, width=30, height=40)
+    right = BoundingBox(x=28, y=0, width=30, height=40)  # 2px of mutual encroachment
+
+    assert _boxes_overlap_fraction(left, right) < 0.1
+
+    merged = merge_tiled_detections([(left, 0.9), (right, 0.85)], iou_threshold=0.5)
+
+    assert len(merged) == 2
+    assert left in merged
+    assert right in merged
+
+
+def test_merge_tiled_detections_keeps_small_sign_near_a_much_larger_one():
+    # The metric's sharpest edge: intersection-over-smaller reports 1.0 for a
+    # small box fully inside a large one. That is the intended suppression
+    # for a nested duplicate, but a small sign merely *adjacent* to a large
+    # one -- overlapping it only at a corner -- must still be kept.
+    large = BoundingBox(x=0, y=0, width=100, height=100)
+    small = BoundingBox(x=98, y=98, width=10, height=10)
+
+    merged = merge_tiled_detections([(large, 0.9), (small, 0.7)], iou_threshold=0.5)
 
     assert len(merged) == 2
 
