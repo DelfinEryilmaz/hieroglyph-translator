@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from hieroglyph.segmentation.synthesize import (
+    FOREGROUND_THRESHOLD,
     box_to_yolo_line,
     generate_dataset,
     generate_mixed_dataset,
@@ -14,6 +15,7 @@ from hieroglyph.segmentation.synthesize import (
     split_crop_paths,
     synthesize_column_composite,
     synthesize_composite,
+    synthesize_negative_composite,
 )
 from hieroglyph.segmentation.types import BoundingBox
 
@@ -337,6 +339,7 @@ def test_generate_mixed_dataset_dense_composites_fill_the_canvas(tmp_path: Path)
         output_dir,
         num_composites=3,
         dense_fraction=1.0,  # every composite takes the dense/column branch
+        negative_fraction=0.0,  # no hard negatives in this test
         column_canvas_sizes=[(canvas_w, canvas_h)],
         seed=1,
     )
@@ -366,3 +369,47 @@ def test_generate_mixed_dataset_writes_nothing_when_num_composites_is_zero(tmp_p
     generate_mixed_dataset(crop_paths, output_dir, num_composites=0, seed=1)
 
     assert not (output_dir / "images").exists() or list((output_dir / "images").glob("*.png")) == []
+
+
+def test_synthesize_negative_composite_has_no_boxes():
+    composite = synthesize_negative_composite(canvas_size=(100, 100), rng=random.Random(0))
+
+    assert composite.boxes == []
+    assert composite.image.shape == (100, 100)
+
+
+def test_synthesize_negative_composite_is_deterministic_given_same_seed():
+    a = synthesize_negative_composite(canvas_size=(100, 100), rng=random.Random(7))
+    b = synthesize_negative_composite(canvas_size=(100, 100), rng=random.Random(7))
+
+    assert np.array_equal(a.image, b.image)
+
+
+def test_synthesize_negative_composite_draws_visible_distractor_content():
+    composite = synthesize_negative_composite(canvas_size=(200, 200), rng=random.Random(1))
+
+    dark_pixel_count = int((composite.image < FOREGROUND_THRESHOLD).sum())
+    assert dark_pixel_count > 50
+
+
+def test_generate_mixed_dataset_negative_fraction_one_writes_only_empty_labels(tmp_path: Path):
+    crop_paths = _make_raw_crop_paths(tmp_path)
+
+    output_dir = tmp_path / "synthetic"
+    generate_mixed_dataset(crop_paths, output_dir, num_composites=5, negative_fraction=1.0, seed=3)
+
+    labels = sorted((output_dir / "labels").glob("*.txt"))
+    assert len(labels) == 5
+    for label_path in labels:
+        assert label_path.read_text(encoding="utf-8").strip() == ""
+
+
+def test_generate_mixed_dataset_default_negative_fraction_produces_some_negatives(tmp_path: Path):
+    crop_paths = _make_raw_crop_paths(tmp_path)
+
+    output_dir = tmp_path / "synthetic"
+    generate_mixed_dataset(crop_paths, output_dir, num_composites=40, seed=4)
+
+    labels = sorted((output_dir / "labels").glob("*.txt"))
+    empty_count = sum(1 for p in labels if not p.read_text(encoding="utf-8").strip())
+    assert 0 < empty_count < len(labels)  # a real mix, not all-or-nothing

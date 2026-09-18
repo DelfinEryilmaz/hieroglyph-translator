@@ -214,25 +214,95 @@ def synthesize_column_composite(
     return SynthesizedComposite(image=canvas, boxes=boxes)
 
 
-def box_to_yolo_line(box: BoundingBox, canvas_w: int, canvas_h: int) -> str:
-    """One YOLO segmentation-format label line: class index followed by
-    the box's own four corners as a degenerate polygon (top-left,
-    top-right, bottom-right, bottom-left), each coordinate normalized to
-    [0, 1].
+def synthesize_negative_composite(
+    canvas_size: tuple[int, int] = (640, 640),
+    background_value: int = 210,
+    background_noise_std: float = 10.0,
+    n_shapes_range: tuple[int, int] = (3, 8),
+    ink_value_range: tuple[int, int] = (40, 140),
+    thickness_range: tuple[int, int] = (2, 6),
+    rng: random.Random | None = None,
+) -> SynthesizedComposite:
+    """Build a canvas with procedural "distractor" line-art -- no glyph
+    crops, no boxes -- so the detector sees some "this is dark, structured
+    ink, but not a sign" signal during training. Every composite
+    synthesize_composite/synthesize_column_composite ever produce has
+    glyph crops on it; the detector has never been shown a hard negative.
 
-    The fine-tuned checkpoint is a YOLOv8-*segmentation* model (see
-    reports/2026-09-15-segmentation-detector-sourcing.md) -- ultralytics'
-    segment-task dataset loader requires segment labels, not detection's
-    `class cx cy w h`, and raises ValueError otherwise. A box's own four
-    corners, traced in order, is exactly the box as a polygon: no
-    information is lost, and ultralytics converts it back to the same
-    bounding box internally (`segments2boxes`).
+    Draws a random number of thick curved strokes (short random polylines)
+    and ellipses (filled or outlined) at random position/size/thickness,
+    in the same dark-ink tone range real glyph strokes use -- approximating
+    the general character of figure/illustration line-art (continuous
+    curved marks, larger connected shapes) as opposed to a glyph's small,
+    compact, self-contained ink blob. This is a proxy, not real
+    illustration content -- see
+    docs/superpowers/specs/2026-09-18-real-data-finetune-and-hard-negatives-design.md
+    for why a procedural approximation was chosen over sourcing a real
+    illustration dataset.
+    """
+    rng = rng or random.Random()
+    canvas_w, canvas_h = canvas_size
+
+    rng_np = np.random.default_rng(rng.getrandbits(32))
+    noise = rng_np.normal(loc=0.0, scale=background_noise_std, size=(canvas_h, canvas_w))
+    canvas = np.clip(background_value + noise, 0, 255).astype(np.uint8)
+
+    n_shapes = rng.randint(*n_shapes_range)
+    for _ in range(n_shapes):
+        ink_value = rng.randint(*ink_value_range)
+        thickness = rng.randint(*thickness_range)
+
+        if rng.random() < 0.5:
+            n_points = rng.randint(3, 6)
+            points = [
+                (rng.randint(0, canvas_w - 1), rng.randint(0, canvas_h - 1)) for _ in range(n_points)
+            ]
+            pts = np.array(points, dtype=np.int32).reshape(-1, 1, 2)
+            cv2.polylines(canvas, [pts], isClosed=False, color=int(ink_value), thickness=thickness)
+        else:
+            center = (rng.randint(0, canvas_w - 1), rng.randint(0, canvas_h - 1))
+            axes = (rng.randint(10, max(11, canvas_w // 6)), rng.randint(10, max(11, canvas_h // 6)))
+            angle = rng.uniform(0, 360)
+            filled = rng.random() < 0.5
+            cv2.ellipse(
+                canvas,
+                center,
+                axes,
+                angle,
+                0,
+                360,
+                color=int(ink_value),
+                thickness=-1 if filled else thickness,
+            )
+
+    return SynthesizedComposite(image=canvas, boxes=[])
+
+
+def _corner_polygon_line(cls: int, x1: float, y1: float, x2: float, y2: float) -> str:
+    """One YOLO *segmentation*-format label line for an axis-aligned box,
+    given already-normalized [0, 1] corner coordinates: class index
+    followed by the box's own four corners as a degenerate polygon
+    (top-left, top-right, bottom-right, bottom-left).
+
+    Shared by box_to_yolo_line (this module, pixel-space BoundingBox
+    input) and hieroglyph.segmentation.real_data.prepare_real_finetune_split
+    (already-normalized real-photo boxes) so both stay identical on the
+    exact corner order ultralytics' segment-task loader expects -- see
+    box_to_yolo_line's docstring for why this format is needed at all.
+    """
+    return f"{cls} {x1:.6f} {y1:.6f} {x2:.6f} {y1:.6f} {x2:.6f} {y2:.6f} {x1:.6f} {y2:.6f}"
+
+
+def box_to_yolo_line(box: BoundingBox, canvas_w: int, canvas_h: int) -> str:
+    """One YOLO segmentation-format label line for a pixel-space
+    BoundingBox -- see _corner_polygon_line for the format itself and why
+    it's needed.
     """
     x1 = box.x / canvas_w
     y1 = box.y / canvas_h
     x2 = box.x2 / canvas_w
     y2 = box.y2 / canvas_h
-    return f"0 {x1:.6f} {y1:.6f} {x2:.6f} {y1:.6f} {x2:.6f} {y2:.6f} {x1:.6f} {y2:.6f}"
+    return _corner_polygon_line(0, x1, y1, x2, y2)
 
 
 def write_composite(composite: SynthesizedComposite, image_path: Path, label_path: Path) -> None:
@@ -332,18 +402,26 @@ def generate_mixed_dataset(
     output_dir: Path,
     num_composites: int,
     dense_fraction: float = 0.5,
+    negative_fraction: float = 0.15,
     scatter_canvas_size: tuple[int, int] = (640, 640),
     column_canvas_sizes: list[tuple[int, int]] = [(200, 640), (640, 200), (300, 640)],
     seed: int = 0,
 ) -> None:
     """Generate `num_composites` synthetic training images + YOLO labels,
-    mixing dense column-packed composites with the existing sparse scatter
-    composites -- a real photo can be either a densely packed papyrus
-    column or a sparser wall-carving-style inscription, so training data
-    that's only one or the other leaves the detector generalizing to just
-    half of what it'll see. `generate_dataset` (scatter-only) stays the
-    entry point for callers that don't need the mix; this is purely
-    additive alongside it.
+    mixing dense column-packed composites, sparse scatter composites, and
+    hard-negative composites (no glyphs at all) -- a real photo can be a
+    densely packed papyrus column, a sparser wall-carving-style
+    inscription, or contain non-glyph illustration content the detector
+    must learn to reject, so training data that's only glyphs-on-every-image
+    leaves the detector with no negative signal. `generate_dataset`
+    (scatter-only) stays the entry point for callers that don't need the
+    mix; this is purely additive alongside it.
+
+    A `negative_fraction` of composites (checked first, before the
+    dense/scatter split) are hard-negative composites via
+    `synthesize_negative_composite` -- procedural distractor line-art, no
+    glyph crops, empty labels. See
+    docs/superpowers/specs/2026-09-18-real-data-finetune-and-hard-negatives-design.md.
 
     Per composite index, `rng.random() < dense_fraction` picks
     `synthesize_column_composite` with its `canvas_size` sampled uniformly
@@ -372,27 +450,33 @@ def generate_mixed_dataset(
     rng = random.Random(seed)
     for i in range(num_composites):
         # The branch (and, for the dense branch, the canvas) is chosen first
-        # because the crop count depends on it -- see the docstring.
-        is_dense = rng.random() < dense_fraction
-        if is_dense:
-            canvas_size = rng.choice(column_canvas_sizes)
-            budget = dense_crop_budget(canvas_size)
-            n_crops = rng.randint(budget, 2 * budget)
+        # because the crop count depends on it -- see the docstring. One
+        # roll decides negative vs. dense vs. scatter (additive thresholds),
+        # not a separate roll per check.
+        roll = rng.random()
+        if roll < negative_fraction:
+            composite = synthesize_negative_composite(canvas_size=scatter_canvas_size, rng=rng)
         else:
-            n_crops = rng.randint(3, 10)  # same default range as generate_dataset's crops_per_composite
+            is_dense = roll < negative_fraction + dense_fraction
+            if is_dense:
+                canvas_size = rng.choice(column_canvas_sizes)
+                budget = dense_crop_budget(canvas_size)
+                n_crops = rng.randint(budget, 2 * budget)
+            else:
+                n_crops = rng.randint(3, 10)  # same default range as generate_dataset's crops_per_composite
 
-        chosen_paths = rng.choices(crop_paths, k=n_crops)
-        crops = []
-        for p in chosen_paths:
-            crop = cv2.imread(str(p), cv2.IMREAD_GRAYSCALE)
-            if crop is None:
-                raise ValueError(f"Could not read crop image (missing, corrupt, or not an image): {p}")
-            crops.append(crop)
+            chosen_paths = rng.choices(crop_paths, k=n_crops)
+            crops = []
+            for p in chosen_paths:
+                crop = cv2.imread(str(p), cv2.IMREAD_GRAYSCALE)
+                if crop is None:
+                    raise ValueError(f"Could not read crop image (missing, corrupt, or not an image): {p}")
+                crops.append(crop)
 
-        if is_dense:
-            composite = synthesize_column_composite(crops, canvas_size=canvas_size, rng=rng)
-        else:
-            composite = synthesize_composite(crops, canvas_size=scatter_canvas_size, rng=rng)
+            if is_dense:
+                composite = synthesize_column_composite(crops, canvas_size=canvas_size, rng=rng)
+            else:
+                composite = synthesize_composite(crops, canvas_size=scatter_canvas_size, rng=rng)
 
         write_composite(
             composite,
