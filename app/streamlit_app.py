@@ -15,7 +15,7 @@ from PIL import Image
 from hieroglyph.lookup.gardiner_lookup import GardinerLookup
 from hieroglyph.models.classifier import load_checkpoint
 from hieroglyph.pipeline.inference import run_inference
-from hieroglyph.segmentation.yolo import load_or_fallback
+from hieroglyph.segmentation.tiling import load_tiled_or_fallback
 from hieroglyph.utils.visualization import draw_annotated_image
 
 CHECKPOINT_PATH = Path(__file__).resolve().parent.parent / "models" / "best_model.pt"
@@ -105,7 +105,7 @@ def load_model_and_lookup():
 
 @st.cache_resource(show_spinner="Loading segmenter...")
 def load_segmenter():
-    return load_or_fallback(YOLO_CHECKPOINT_PATH)
+    return load_tiled_or_fallback(YOLO_CHECKPOINT_PATH)
 
 
 def confidence_class(confidence: float) -> str:

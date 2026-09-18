@@ -31,6 +31,7 @@ import numpy as np
 from ultralytics import YOLO
 
 from hieroglyph.segmentation.base import Segmenter
+from hieroglyph.segmentation.classical import ClassicalSegmenter
 from hieroglyph.segmentation.types import BoundingBox
 from hieroglyph.segmentation.yolo import _xyxy_to_boxes
 
@@ -161,3 +162,14 @@ class TiledYoloSegmenter(Segmenter):
                 all_detections.append((_offset_box(box, x, y), confidence))
 
         return merge_tiled_detections(all_detections, self.iou_threshold)
+
+
+def load_tiled_or_fallback(checkpoint_path: Path) -> Segmenter:
+    """TiledYoloSegmenter if a fine-tuned checkpoint exists at checkpoint_path,
+    otherwise ClassicalSegmenter -- mirrors yolo.py's load_or_fallback exactly,
+    kept here (not there) to avoid a circular import, since this module
+    already imports from yolo.py.
+    """
+    if checkpoint_path.exists():
+        return TiledYoloSegmenter(checkpoint_path)
+    return ClassicalSegmenter()

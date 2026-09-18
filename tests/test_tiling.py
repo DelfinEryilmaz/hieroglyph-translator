@@ -1,7 +1,11 @@
+from pathlib import Path
+
+from hieroglyph.segmentation.classical import ClassicalSegmenter
 from hieroglyph.segmentation.tiling import (
     _iou,
     _offset_box,
     generate_tile_origins,
+    load_tiled_or_fallback,
     merge_tiled_detections,
 )
 from hieroglyph.segmentation.types import BoundingBox
@@ -180,3 +184,11 @@ def test_merge_tiled_detections_below_threshold_overlap_keeps_both():
     merged = merge_tiled_detections([(a, 0.9), (b, 0.5)], iou_threshold=0.5)
 
     assert len(merged) == 2
+
+
+def test_load_tiled_or_fallback_returns_classical_when_no_checkpoint(tmp_path: Path):
+    missing_path = tmp_path / "does_not_exist.pt"
+
+    segmenter = load_tiled_or_fallback(missing_path)
+
+    assert isinstance(segmenter, ClassicalSegmenter)
