@@ -40,8 +40,11 @@ list) → reading-order sort → gloss output.
   Two further, independent levers now exist:
   `synthesize_negative_composite` (procedural distractor training
   composites with empty labels) and a real-data fine-tune stage using 90
-  committed, human-annotated real photos
-  (`data/real_eval_photos/{train,valid}/`) — see
+  committed, human-annotated real photo files
+  (`data/real_eval_photos/{train,valid}/`) — 83 train files that are really
+  28 distinct source photos (27 with three Roboflow rotation-augmented
+  copies each, one with two) plus 7 distinct valid photos, so the effective
+  distinct sample size is 35, not 90 — see
   `docs/superpowers/specs/2026-09-18-real-data-finetune-and-hard-negatives-design.md`.
   As with the dense/sparse fix, `models/yolo_seg.pt` hasn't been retrained
   on this yet.

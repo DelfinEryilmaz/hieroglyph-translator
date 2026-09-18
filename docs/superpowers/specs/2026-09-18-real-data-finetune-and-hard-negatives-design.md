@@ -23,8 +23,13 @@ figure regions were still flagged. The gap is structural: the model has
 never seen a negative example.
 
 Separately, this repo already has 90 real, human-annotated hieroglyph
-photos sitting unused: `data/real_eval_photos/train/` (83 image+label
-pairs) and `data/real_eval_photos/valid/` (7 pairs), from the Roboflow
+photo files sitting unused: `data/real_eval_photos/train/` (83 image+label
+pairs — really 28 distinct source photos, 27 of them with three Roboflow
+rotation-augmented copies each and one with two) and
+`data/real_eval_photos/valid/` (7 pairs, 7 distinct photos, no source-photo
+overlap with train). The effective distinct sample size is therefore 35
+photos, not 90, even though 83 + 7 is the correct file/pair count to feed
+training. Both splits come from the Roboflow
 "egyptian-hieroglyphs" dataset (CC BY 4.0, downloaded per
 `notebooks/05_evaluate_segmenter.ipynb` section 3's manual step). Phase
 12's original spec
@@ -88,8 +93,9 @@ real-data fine-tune (below) is the second, independent lever.
 ## 2. Real-data fine-tuning stage
 
 ### Data: commit the already-downloaded real train/valid split
-`data/real_eval_photos/train/` (83 pairs, 2.1MB) and
-`data/real_eval_photos/valid/` (7 pairs, 163KB) — currently covered by the
+`data/real_eval_photos/train/` (83 pairs / 28 distinct source photos,
+2.1MB) and `data/real_eval_photos/valid/` (7 pairs / 7 distinct photos,
+163KB) — currently covered by the
 blanket-ignored `data/real_eval_photos/` `.gitignore` entry — get carved
 out and committed to the repo (small enough: ~2.3MB total). This makes
 them automatically available on Colab via the training notebook's existing

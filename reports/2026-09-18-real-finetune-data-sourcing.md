@@ -1,7 +1,13 @@
 # Real-photo fine-tune data: what's committed and why
 
-**Committed:** `data/real_eval_photos/train/` (83 image+label pairs) and
-`data/real_eval_photos/valid/` (7 pairs), from the Roboflow
+**Committed:** `data/real_eval_photos/train/` (83 image+label pairs, which
+are 28 distinct source photos — 27 of them with three Roboflow
+rotation-augmented copies each, one with two) and
+`data/real_eval_photos/valid/` (7 pairs, 7 distinct photos, none of them a
+source photo that also appears in train). 83 is the correct *file/pair*
+count to train on, but the **effective distinct sample size is 35 photos,
+not 90** — keep that in mind when judging what this fine-tune can teach.
+Both splits are from the Roboflow
 "egyptian-hieroglyphs" dataset
 (https://universe.roboflow.com/custom-yolov8-ljpde/egyptian-hieroglyphs),
 already referenced in
