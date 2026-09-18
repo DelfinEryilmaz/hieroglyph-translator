@@ -1,10 +1,12 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 
 from hieroglyph.segmentation.classical import ClassicalSegmenter
 from hieroglyph.segmentation.synthesize import _boxes_overlap_fraction
 from hieroglyph.segmentation.tiling import (
+    TiledYoloSegmenter,
     _iou,
     _offset_box,
     generate_tile_origins,
@@ -288,6 +290,85 @@ def test_merge_tiled_detections_keeps_small_sign_near_a_much_larger_one():
     merged = merge_tiled_detections([(large, 0.9), (small, 0.7)], iou_threshold=0.5)
 
     assert len(merged) == 2
+
+
+# ---------------------------------------------------------------------------
+# TiledYoloSegmenter.detect (against a stub model -- no real checkpoint)
+# ---------------------------------------------------------------------------
+
+
+class _StubResult:
+    """Minimal stand-in for an ultralytics Results object: detect() only ever
+    reads result.boxes.xyxy / result.boxes.conf and calls .tolist() on them."""
+
+    def __init__(self, xyxy: list[list[float]], conf: list[float]) -> None:
+        self.boxes = SimpleNamespace(xyxy=np.array(xyxy, dtype=float), conf=np.array(conf))
+
+
+class _StubModel:
+    """Records every predict() call and reports one detection per tile, at a
+    fixed position in that tile's own (tile-local) coordinates."""
+
+    def __init__(self, *_args, **_kwargs) -> None:
+        self.calls: list[list[np.ndarray]] = []
+
+    def predict(self, source, conf=None, verbose=None):
+        tiles = source if isinstance(source, list) else [source]
+        self.calls.append(tiles)
+        return [_StubResult([[10.0, 20.0, 40.0, 60.0]], [0.9]) for _ in tiles]
+
+
+def _tiled_segmenter_with_stub(monkeypatch) -> TiledYoloSegmenter:
+    monkeypatch.setattr("hieroglyph.segmentation.tiling.YOLO", _StubModel)
+    return TiledYoloSegmenter(Path("not-a-real-checkpoint.pt"))
+
+
+def test_detect_runs_one_batched_predict_call_for_all_tiles(monkeypatch):
+    # The whole point of batching: N tiles used to mean N inference calls
+    # (~48 for a 4032x3024 phone photo), tens of seconds of CPU latency in
+    # the Streamlit demo. Now it is a single call, whatever N is.
+    segmenter = _tiled_segmenter_with_stub(monkeypatch)
+    image = np.zeros((1500, 1500, 3), dtype=np.uint8)
+
+    expected_tiles = len(generate_tile_origins((1500, 1500), segmenter.tile_size, segmenter.overlap))
+    assert expected_tiles > 1  # the fixture must actually be tiled
+
+    segmenter.detect(image)
+
+    assert len(segmenter.model.calls) == 1
+    assert len(segmenter.model.calls[0]) == expected_tiles
+
+
+def test_detect_offsets_each_tiles_detections_back_into_image_coordinates(monkeypatch):
+    # Batching must not change WHAT is detected: each tile's local box still
+    # comes back offset by that tile's own origin.
+    segmenter = _tiled_segmenter_with_stub(monkeypatch)
+    image = np.zeros((1500, 1500, 3), dtype=np.uint8)
+    origins = generate_tile_origins((1500, 1500), segmenter.tile_size, segmenter.overlap)
+
+    boxes = segmenter.detect(image)
+
+    # The stub reports xyxy (10, 20, 40, 60) -> BoundingBox(10, 20, 30, 40).
+    expected = {
+        (10 + x, 20 + y, 30, 40) for x, y in origins
+    }
+    assert {(b.x, b.y, b.width, b.height) for b in boxes} <= expected
+    assert boxes  # and at least one survived the merge
+
+
+def test_detect_passes_every_tile_slice_to_the_model(monkeypatch):
+    # Each batched tile is exactly the slice the origin describes, clipped at
+    # the image bounds -- so a short axis yields a short tile rather than a
+    # silently truncated view of the image (Finding 1).
+    segmenter = _tiled_segmenter_with_stub(monkeypatch)
+    image = np.zeros((2000, 400, 3), dtype=np.uint8)  # (h, w): small in x only
+
+    segmenter.detect(image)
+
+    tiles = segmenter.model.calls[0]
+    assert len(tiles) == len(generate_tile_origins((400, 2000), segmenter.tile_size, segmenter.overlap))
+    for tile in tiles:
+        assert tile.shape == (640, 400, 3)
 
 
 def test_load_tiled_or_fallback_returns_classical_when_no_checkpoint(tmp_path: Path):

@@ -178,12 +178,19 @@ class TiledYoloSegmenter(Segmenter):
         origins = generate_tile_origins((image_width, image_height), self.tile_size, self.overlap)
         tile_w, tile_h = self.tile_size
 
+        # All tiles go to the model in ONE predict() call: ultralytics accepts
+        # a list of images and returns one Results per input, in order. A
+        # per-tile loop meant one inference call per tile -- ~15 for the
+        # Papyrus of Ani eval photo and ~48 for a 4032x3024 phone photo,
+        # tens of seconds of CPU latency in the Streamlit demo, with no
+        # progress feedback -- for detections identical to these.
+        tiles = [image[y : y + tile_h, x : x + tile_w] for x, y in origins]
+        results = self.model.predict(tiles, conf=self.confidence_threshold, verbose=False)
+
         all_detections: list[tuple[BoundingBox, float]] = []
-        for x, y in origins:
-            tile = image[y : y + tile_h, x : x + tile_w]
-            results = self.model.predict(tile, conf=self.confidence_threshold, verbose=False)
-            xyxy = results[0].boxes.xyxy.tolist()
-            confidences = results[0].boxes.conf.tolist()
+        for (x, y), result in zip(origins, results):
+            xyxy = result.boxes.xyxy.tolist()
+            confidences = result.boxes.conf.tolist()
             tile_boxes = _xyxy_to_boxes(xyxy)
             for box, confidence in zip(tile_boxes, confidences):
                 all_detections.append((_offset_box(box, x, y), confidence))
