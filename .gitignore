@@ -5,6 +5,7 @@ __pycache__/
 data/raw/
 data/processed/
 data/synthetic_composites/
+data/real_finetune/
 data/real_eval_photos/*
 !data/real_eval_photos/train/
 !data/real_eval_photos/train/**
