@@ -278,25 +278,31 @@ def synthesize_negative_composite(
     return SynthesizedComposite(image=canvas, boxes=[])
 
 
-def box_to_yolo_line(box: BoundingBox, canvas_w: int, canvas_h: int) -> str:
-    """One YOLO segmentation-format label line: class index followed by
-    the box's own four corners as a degenerate polygon (top-left,
-    top-right, bottom-right, bottom-left), each coordinate normalized to
-    [0, 1].
+def _corner_polygon_line(cls: int, x1: float, y1: float, x2: float, y2: float) -> str:
+    """One YOLO *segmentation*-format label line for an axis-aligned box,
+    given already-normalized [0, 1] corner coordinates: class index
+    followed by the box's own four corners as a degenerate polygon
+    (top-left, top-right, bottom-right, bottom-left).
 
-    The fine-tuned checkpoint is a YOLOv8-*segmentation* model (see
-    reports/2026-09-15-segmentation-detector-sourcing.md) -- ultralytics'
-    segment-task dataset loader requires segment labels, not detection's
-    `class cx cy w h`, and raises ValueError otherwise. A box's own four
-    corners, traced in order, is exactly the box as a polygon: no
-    information is lost, and ultralytics converts it back to the same
-    bounding box internally (`segments2boxes`).
+    Shared by box_to_yolo_line (this module, pixel-space BoundingBox
+    input) and hieroglyph.segmentation.real_data.prepare_real_finetune_split
+    (already-normalized real-photo boxes) so both stay identical on the
+    exact corner order ultralytics' segment-task loader expects -- see
+    box_to_yolo_line's docstring for why this format is needed at all.
+    """
+    return f"{cls} {x1:.6f} {y1:.6f} {x2:.6f} {y1:.6f} {x2:.6f} {y2:.6f} {x1:.6f} {y2:.6f}"
+
+
+def box_to_yolo_line(box: BoundingBox, canvas_w: int, canvas_h: int) -> str:
+    """One YOLO segmentation-format label line for a pixel-space
+    BoundingBox -- see _corner_polygon_line for the format itself and why
+    it's needed.
     """
     x1 = box.x / canvas_w
     y1 = box.y / canvas_h
     x2 = box.x2 / canvas_w
     y2 = box.y2 / canvas_h
-    return f"0 {x1:.6f} {y1:.6f} {x2:.6f} {y1:.6f} {x2:.6f} {y2:.6f} {x1:.6f} {y2:.6f}"
+    return _corner_polygon_line(0, x1, y1, x2, y2)
 
 
 def write_composite(composite: SynthesizedComposite, image_path: Path, label_path: Path) -> None:
