@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import numpy as np
+
 from hieroglyph.segmentation.classical import ClassicalSegmenter
 from hieroglyph.segmentation.tiling import (
     _iou,
@@ -28,13 +30,54 @@ def test_generate_tile_origins_single_origin_when_exactly_tile_size():
     assert origins == [(0, 0)]
 
 
-def test_generate_tile_origins_single_origin_when_smaller_in_only_one_dimension():
-    # Per spec: "smaller than tile_size in either dimension" degenerates to
-    # a single (0, 0) origin -- tiling only kicks in when the image is at
-    # least as large as tile_size in BOTH dimensions.
+def test_generate_tile_origins_tiles_long_axis_when_smaller_in_only_one_dimension():
+    # A tall narrow column crop is smaller than the tile in x only. The
+    # short axis degenerates to a single origin, but the LONG axis must
+    # still be tiled -- otherwise detect()'s image[y:y+640, x:x+640] slice
+    # would silently examine only the top 640 rows of a 1200-row image.
     origins = generate_tile_origins((300, 1200), tile_size=(640, 640), overlap=0.2)
 
-    assert origins == [(0, 0)]
+    xs = sorted({x for x, y in origins})
+    ys = sorted({y for x, y in origins})
+    assert xs == [0]
+    assert len(ys) > 1
+    assert max(ys) == 1200 - 640  # last tile snaps to the bottom edge
+
+
+def test_generate_tile_origins_tiles_long_axis_when_smaller_in_height_only():
+    # Mirror of the above for a wide short strip (smaller in y only).
+    origins = generate_tile_origins((1800, 300), tile_size=(640, 640), overlap=0.2)
+
+    xs = sorted({x for x, y in origins})
+    ys = sorted({y for x, y in origins})
+    assert ys == [0]
+    assert len(xs) > 1
+    assert max(xs) == 1800 - 640
+
+
+def test_generate_tile_origins_tiles_cover_every_pixel_for_representative_sizes():
+    # Regression guard for the whole class of "silently examines only part
+    # of the image" bugs: the union of the tile rectangles actually sliced
+    # by detect() -- image[y:y+tile_h, x:x+tile_w], which numpy clips at the
+    # image bounds -- must cover the image completely, for images small in
+    # one dimension, both, or neither.
+    tile_w, tile_h = 640, 640
+    for img_w, img_h in [
+        (400, 2000),  # small in x only (tall column crop)
+        (639, 4000),  # small in x only, just under one tile
+        (3000, 300),  # small in y only (wide strip)
+        (357, 140),  # small in both
+        (640, 640),  # exactly one tile
+        (1600, 900),  # large in both
+    ]:
+        origins = generate_tile_origins((img_w, img_h), tile_size=(tile_w, tile_h), overlap=0.2)
+
+        covered = np.zeros((img_h, img_w), dtype=bool)
+        for x, y in origins:
+            covered[y : y + tile_h, x : x + tile_w] = True
+
+        uncovered = int((~covered).sum())
+        assert uncovered == 0, f"{uncovered} px of the {img_w}x{img_h} image are never examined"
 
 
 def test_generate_tile_origins_covers_large_image_with_overlap():

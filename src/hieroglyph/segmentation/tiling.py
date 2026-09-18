@@ -10,9 +10,12 @@ detections back into the original image's coordinate system, and merges
 duplicate detections of signs that straddle a tile boundary (and so get
 detected more than once, in more than one tile) via greedy NMS.
 
-For an image already smaller than one tile -- e.g. an already-cropped small
-photo -- this degenerates to a single tile covering the whole image, i.e.
-behaves exactly like plain YoloSegmenter.
+For an image smaller than one tile in BOTH dimensions -- e.g. an
+already-cropped small photo -- this degenerates to a single tile covering
+the whole image, i.e. behaves exactly like plain YoloSegmenter. An image
+smaller than a tile in only ONE dimension (e.g. a tall narrow column crop)
+still gets tiled along its long axis; only the short axis degenerates to a
+single origin. See generate_tile_origins.
 
 Coordinate/size convention: everywhere in this module, an (x, y) or (width,
 height) pair is in (horizontal, vertical) order, matching BoundingBox's
@@ -67,18 +70,21 @@ def generate_tile_origins(
     image_size and tile_size are both (width, height), matching
     BoundingBox's x/width, y/height convention.
 
-    If image_size is smaller than tile_size in either dimension, returns a
-    single origin (0, 0) -- no tiling needed for small/already-cropped
-    photos, only for large ones.
+    The "image smaller than a tile" case is decided **per axis, not
+    globally**: an axis no longer than its tile dimension gets a single
+    origin 0 (the tile, clipped by the slice in `detect`, already spans that
+    whole axis), while the other axis is still tiled normally if it is
+    longer. Deciding this globally would be a silent data-loss bug: a tall
+    narrow column crop (e.g. 400x2000) is smaller than a 640x640 tile in x
+    only, and a single (0, 0) origin would leave `detect`'s
+    `image[0:640, 0:640]` slice examining just the top 640 rows -- 32% of
+    the image -- with no error and no warning.
     """
     img_w, img_h = image_size
     tile_w, tile_h = tile_size
 
-    if img_w < tile_w or img_h < tile_h:
-        return [(0, 0)]
-
-    x_origins = _axis_origins(img_w, tile_w, overlap)
-    y_origins = _axis_origins(img_h, tile_h, overlap)
+    x_origins = [0] if img_w <= tile_w else _axis_origins(img_w, tile_w, overlap)
+    y_origins = [0] if img_h <= tile_h else _axis_origins(img_h, tile_h, overlap)
     return [(x, y) for y in y_origins for x in x_origins]
 
 
