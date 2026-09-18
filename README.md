@@ -17,13 +17,24 @@ list) → reading-order sort → gloss output.
 - Segmentation defaults to classical OpenCV (contour detection) — works
   best on clean/high-contrast photos, struggles on heavily weathered or
   cluttered wall photos. A trained alternative now exists
-  (`hieroglyph.segmentation.yolo.YoloSegmenter`, a YOLOv8 detector
-  fine-tuned on synthesized composite images — see
+  (`hieroglyph.segmentation.yolo.YoloSegmenter`/`TiledYoloSegmenter`, a
+  YOLOv8 detector fine-tuned on synthesized composite images — see
   `notebooks/04_train_segmenter.ipynb` and
   `reports/2026-09-15-segmentation-detector-sourcing.md`) but isn't trained
   by default; run the training notebook and drop the result at
   `models/yolo_seg.pt` to have the Streamlit demo pick it up automatically
   (falls back to classical CV if that file isn't present).
+- Dense, tightly-packed real text (e.g. an actual papyrus column, as
+  opposed to a sparser wall-carving-style photo) is a known hard case: the
+  original training data was sparse-scatter only. `TiledYoloSegmenter`
+  (`src/hieroglyph/segmentation/tiling.py`) fixes the inference-time half
+  of this (no destructive whole-image downscale) independently of
+  retraining; `generate_mixed_dataset`
+  (`src/hieroglyph/segmentation/synthesize.py`) fixes the training-data
+  half, but the shipped `models/yolo_seg.pt` hasn't been retrained on it
+  yet — see `docs/superpowers/specs/2026-09-17-dense-text-detection-design.md`
+  and `notebooks/05_evaluate_segmenter.ipynb` Section 5 for the real-papyrus
+  qualitative check.
 - Reading order is a simple row-major (top-to-bottom, left-to-right) sort —
   doesn't account for true Egyptian reading order (which depends on
   sign-facing direction).
@@ -60,6 +71,8 @@ without manual `sys.path` hacking.
 - `scripts/download_data.py` — dataset download helper
 - `scripts/download_pretrained_yolo.py` — pretrained segmentation-detector
   checkpoint download helper
+- `scripts/download_papyrus_eval_photo.py` — real-papyrus qualitative-eval
+  photo download helper
 - `reports/` — reference material and notes collected while building this
   (dataset sourcing, Gardiner list sourcing, decisions) — read this for
   context if picking the project back up later
