@@ -50,7 +50,7 @@ clusters (e.g. G1/G17/G35/G4; M1/M29/M17) rather than arbitrary errors — see
 `notebooks/03_evaluate_classifier.ipynb` for the full per-class report.
 
 `YoloSegmenter` (YOLOv8-segmentation fine-tuned on synthesized composite
-images): **mAP50 0.995 / mAP50-95 0.823** on a held-out synthetic test set
+images): **mAP50 0.9948 / mAP50-95 0.8047** on a held-out synthetic test set
 (500 composites, 3,179 instances). This measures detection on our own
 synthetic compositing style, not real photos — no ground-truth boxes exist
 for real photos to compute mAP against; a qualitative check against 10 real
