@@ -5,7 +5,11 @@ __pycache__/
 data/raw/
 data/processed/
 data/synthetic_composites/
-data/real_eval_photos/
+data/real_eval_photos/*
+!data/real_eval_photos/train/
+!data/real_eval_photos/train/**
+!data/real_eval_photos/valid/
+!data/real_eval_photos/valid/**
 models/*.pt
 models/*.pth
 .pytest_cache/
