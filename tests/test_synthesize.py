@@ -315,6 +315,43 @@ def test_generate_mixed_dataset_exercises_both_column_and_scatter_paths(tmp_path
     assert scatter_shape in shapes, f"no scatter-shaped composite found among {shapes}"
 
 
+def test_generate_mixed_dataset_dense_composites_fill_the_canvas(tmp_path: Path):
+    # Regression guard: the dense branch must supply enough crops to stack a
+    # column all the way down. With a fixed 3-10 crops it filled only the top
+    # ~16% of a 640-tall canvas -- sparser than the scatter composites it is
+    # meant to contrast with, and a systematic "never any sign in the bottom
+    # 80%" artifact for the detector to exploit.
+    raw_dir = tmp_path / "raw"
+    cls_dir = raw_dir / "A1"
+    cls_dir.mkdir(parents=True)
+    for i in range(3):
+        # Realistically sized crop: data/raw's median is 75x50 px, which is
+        # what dense_crop_budget's estimate is calibrated against.
+        cv2.imwrite(str(cls_dir / f"{i}.png"), _dark_square_crop(size=75))
+    crop_paths = list_crop_paths(raw_dir)
+    output_dir = tmp_path / "synthetic"
+    canvas_w, canvas_h = 200, 640
+
+    generate_mixed_dataset(
+        crop_paths,
+        output_dir,
+        num_composites=3,
+        dense_fraction=1.0,  # every composite takes the dense/column branch
+        column_canvas_sizes=[(canvas_w, canvas_h)],
+        seed=1,
+    )
+
+    for label_path in sorted((output_dir / "labels").glob("*.txt")):
+        lines = [l for l in label_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+        # y2 of each box, normalized to [0, 1] -- see box_to_yolo_line's
+        # corner order (x1 y1 x2 y1 x2 y2 x1 y2).
+        lowest_bottom = max(float(line.split()[6]) for line in lines)
+        assert lowest_bottom > 0.8, (
+            f"{label_path.name}: lowest glyph reaches only {lowest_bottom:.0%} "
+            "down the canvas -- the column is not densely filled"
+        )
+
+
 def test_generate_mixed_dataset_raises_clear_error_on_empty_crop_paths(tmp_path: Path):
     output_dir = tmp_path / "synthetic"
 

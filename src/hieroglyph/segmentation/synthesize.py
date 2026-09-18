@@ -16,6 +16,7 @@ the canvas, which no real photo looks like.
 
 from __future__ import annotations
 
+import math
 import random
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,6 +27,18 @@ import numpy as np
 from hieroglyph.segmentation.types import BoundingBox
 
 FOREGROUND_THRESHOLD = 180  # pixel darker than this = glyph ink, not crop background
+
+# Defaults for the dense/column layout, named so `generate_mixed_dataset`'s
+# estimate of "how many crops fill a column" can't drift away from the
+# values `synthesize_column_composite` actually lays out with.
+COLUMN_SCALE_RANGE = (0.2, 0.6)
+COLUMN_GLYPH_GAP_RANGE = (-0.15, 0.08)
+
+# Median height of the classifier's per-glyph crops (data/raw/*/*.png,
+# measured over 311 sampled files: median 75x50 px, mean 75x50). Only used
+# to *estimate* a crop budget -- oversupplying is harmless, since
+# synthesize_column_composite skips crops that no longer fit.
+TYPICAL_CROP_HEIGHT_PX = 75
 
 
 @dataclass
@@ -122,10 +135,10 @@ def synthesize_column_composite(
     canvas_size: tuple[int, int] = (200, 640),
     n_columns: int = 2,
     column_gap_range: tuple[float, float] = (0.0, 0.15),
-    glyph_gap_range: tuple[float, float] = (-0.15, 0.08),
+    glyph_gap_range: tuple[float, float] = COLUMN_GLYPH_GAP_RANGE,
     background_value: int = 210,
     background_noise_std: float = 10.0,
-    scale_range: tuple[float, float] = (0.2, 0.6),
+    scale_range: tuple[float, float] = COLUMN_SCALE_RANGE,
     rng: random.Random | None = None,
 ) -> SynthesizedComposite:
     """Paste `crops` onto one synthetic canvas as `n_columns` tightly packed,
@@ -292,6 +305,28 @@ def generate_dataset(
         )
 
 
+def dense_crop_budget(canvas_size: tuple[int, int], n_columns: int = 2) -> int:
+    """Roughly how many crops `synthesize_column_composite` needs to fill
+    `n_columns` columns of a `canvas_size` canvas top to bottom.
+
+    A stacked glyph advances y by `scaled_height * (1 + gap_fraction)`, so
+    with a typical crop of TYPICAL_CROP_HEIGHT_PX, the mean of
+    COLUMN_SCALE_RANGE and the mean of COLUMN_GLYPH_GAP_RANGE, one column
+    of height `canvas_h` holds about `canvas_h / advance` glyphs. Callers
+    should sample *above* this estimate: a column whose scales happen to
+    land at the small end of the range needs more crops than the mean
+    predicts, and oversupplying costs nothing but a few unused reads --
+    `synthesize_column_composite` skips crops that no longer fit rather
+    than overflowing the canvas.
+    """
+    canvas_h = canvas_size[1]
+    mean_scale = sum(COLUMN_SCALE_RANGE) / 2
+    mean_gap = sum(COLUMN_GLYPH_GAP_RANGE) / 2
+    advance = max(1.0, TYPICAL_CROP_HEIGHT_PX * mean_scale * (1 + mean_gap))
+    per_column = math.ceil(canvas_h / advance)
+    return max(1, per_column * max(1, n_columns))
+
+
 def generate_mixed_dataset(
     crop_paths: list[Path],
     output_dir: Path,
@@ -316,6 +351,17 @@ def generate_mixed_dataset(
     landscape multi-column real-world shapes); otherwise falls back to
     `synthesize_composite`'s scatter path at `scatter_canvas_size`.
 
+    The two paths deliberately use **different crop counts**. The scatter
+    path keeps `generate_dataset`'s 3-10, which is what sparse scatter
+    means. The dense path instead sizes its sample to the chosen canvas via
+    `dense_crop_budget` (see there) and samples between 1x and 2x that
+    estimate, because column stacking fills top-down and simply stops when
+    it runs out of crops: at 3-10 crops a 640-tall canvas ended up ~16%
+    filled with nothing at all below the top sixth -- sparser than the
+    scatter composites it is supposed to contrast with, and a systematic
+    "no signs in the bottom 80%" artifact for a detector to latch onto
+    instead of generalizing.
+
     Writes output_dir/images/composite_%04d.png and
     output_dir/labels/composite_%04d.txt, same naming convention as
     `generate_dataset`.
@@ -325,7 +371,16 @@ def generate_mixed_dataset(
 
     rng = random.Random(seed)
     for i in range(num_composites):
-        n_crops = rng.randint(3, 10)  # same default range as generate_dataset's crops_per_composite
+        # The branch (and, for the dense branch, the canvas) is chosen first
+        # because the crop count depends on it -- see the docstring.
+        is_dense = rng.random() < dense_fraction
+        if is_dense:
+            canvas_size = rng.choice(column_canvas_sizes)
+            budget = dense_crop_budget(canvas_size)
+            n_crops = rng.randint(budget, 2 * budget)
+        else:
+            n_crops = rng.randint(3, 10)  # same default range as generate_dataset's crops_per_composite
+
         chosen_paths = rng.choices(crop_paths, k=n_crops)
         crops = []
         for p in chosen_paths:
@@ -334,8 +389,7 @@ def generate_mixed_dataset(
                 raise ValueError(f"Could not read crop image (missing, corrupt, or not an image): {p}")
             crops.append(crop)
 
-        if rng.random() < dense_fraction:
-            canvas_size = rng.choice(column_canvas_sizes)
+        if is_dense:
             composite = synthesize_column_composite(crops, canvas_size=canvas_size, rng=rng)
         else:
             composite = synthesize_composite(crops, canvas_size=scatter_canvas_size, rng=rng)
